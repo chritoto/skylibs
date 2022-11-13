@@ -22,6 +22,7 @@ SUPPORTED_FORMATS = [
     'skylatlong',
     'sphere',
     'cube',
+    'fisheye',
 ]
 
 #From Dan:
@@ -43,7 +44,7 @@ def isPath(var):
 
 
 class EnvironmentMap:
-    def __init__(self, im, format_=None, copy=True, channels=3):
+    def __init__(self, im, format_=None, copy=True, channels=3, k=None, d=None, xi=None):
         """
         Creates an EnvironmentMap.
 
@@ -91,13 +92,19 @@ class EnvironmentMap:
             raise Exception('Could not understand input. Please provide a '
                             'filename (str), an height (integer) or an image '
                             '(np.ndarray).')
+        if self.format_ == 'fisheye':
+            self.k = k
+            self.d = d
+            self.xi = xi
+            if k is None or d is None or xi is None:
+                raise Exception('Fisheye format requires k, d and xi parameters.')
 
         self.backgroundColor = np.zeros(self.data.shape[-1])
         self.validate()
 
     def validate(self):
         # Ensure the envmap is valid
-        if self.format_ in ['sphere', 'angular', 'skysphere', 'skyangular']:
+        if self.format_ in ['sphere', 'angular', 'skysphere', 'skyangular', 'fisheye']:
             assert self.data.shape[0] == self.data.shape[1], (
                 "Sphere/Angular formats must have the same width/height")
         elif self.format_ == 'latlong':
@@ -209,8 +216,12 @@ class EnvironmentMap:
             'skylatlong': skylatlong2world,
             'sphere': sphere2world,
             'cube': cube2world,
+            'fisheye': fisheye2world,
         }.get(self.format_)
-        return func(u, v)
+        if self.format_ == 'fisheye':
+            return func(u, v, self.k, self.d, self.xi)
+        else:
+            return func(u, v)
 
     def world2image(self, x, y, z):
         """Returns the (u, v) coordinates (in the [0, 1] interval)."""
@@ -221,8 +232,12 @@ class EnvironmentMap:
             'skylatlong': world2skylatlong,
             'sphere': world2sphere,
             'cube': world2cube,
+            'fisheye': world2fisheye,
         }.get(self.format_)
-        return func(x, y, z)
+        if self.format_ == 'fisheye':
+            return func(x, y, z, self.k, self.d, self.xi)
+        else:
+            return func(x, y, z)
 
     def interpolate(self, u, v, valid=None, order=1, filter=True):
         """"Interpolate to get the desired pixel values."""

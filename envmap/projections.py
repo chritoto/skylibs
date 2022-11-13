@@ -1,5 +1,6 @@
 import numpy as np
 from numpy import logical_and as land, logical_or as lor
+import matplotlib.pyplot as plt
 
 
 def world2latlong(x, y, z):
@@ -111,6 +112,69 @@ def skyangular2world(u, v):
 
     r = (u - 0.5)**2 + (v - 0.5)**2
     valid = r <= .25  # .5^2
+
+    return x, y, z, valid
+
+def fisheye2world(u, v, k, d, xi):
+    """Get the (x, y, z, valid) coordinates of the point defined by (u, v)
+    for a fisheye map."""
+    #Based on opencv omnidir implementation:
+    #https://github.com/opencv/opencv_contrib/blob/4.x/modules/ccalib/src/omnidir.cpp
+
+    fx = k[0, 0]
+    fy = k[1, 1]
+    cx = k[0, 2]
+    cy = k[1, 2]
+    s  = k[0, 1]
+    
+    k1 = d[0, 0]
+    k2 = d[0, 1]
+    p1 = d[0, 2]
+    p2 = d[0, 3]
+
+    u = u*u.shape[0]
+    v = v*v.shape[1]
+
+    initial_size = u.shape
+
+    points = np.stack((u,v),axis=-1).reshape((initial_size[0]*initial_size[1],2))
+    n = points.shape[0]
+
+    #Convert to plane
+    points_p = np.zeros((n,2))
+    points_p[:,0] = (points[:,0]*fy-cx*fy-s*(points[:,1]-cy))/(fx*fy)
+    points_p[:,1] = (points[:,1]-cy)/fy
+    #np.array([(points[:,0]*fy-cx*fy-s*(points[:,1]-cy))/(fx*fy), (points[:,1]-cy)/fy])
+
+    #Remove distortion iteratively
+    points_u = np.zeros((n,2))
+
+    for i in range(20):
+        r2 = points_u[:,0]**2 + points_u[:,1]**2
+        r4 = r2**2
+
+        points_u[:,0] = (points_p[:,0] - 2*p1*points_u[:,0]*points_u[:,1] - p2*(r2+2*points_u[:,0]*points_u[:,0])) / (1 + k1*r2 + k2*r4)
+        points_u[:,1] = (points_p[:,1] - 2*p2*points_u[:,0]*points_u[:,1] - p1*(r2+2*points_u[:,1]*points_u[:,1])) / (1 + k1*r2 + k2*r4)
+
+    #Project to unit sphere
+    r2 = points_u[:,0]**2 + points_u[:,1]**2
+    a = (r2 + 1)
+    b = 2*xi*r2
+    cc = r2*xi*xi-1
+    Zs = (-b + np.sqrt(b*b - 4*a*cc))/(2*a)
+    
+    #Y and Z negative to fit with skylibs coordinates
+    x = points_u[:,0]*(Zs+xi)
+    y = -points_u[:,1]*(Zs+xi)
+    z = -Zs
+
+    x = x.reshape(initial_size)
+    y = y.reshape(initial_size)
+    z = z.reshape(initial_size)
+
+    r = np.sqrt((u - cx)**2 + (v - cy)**2)
+
+    valid = r <= np.min([cx,cy, initial_size[0]-cx, initial_size[1]-cy])
 
     return x, y, z, valid
 
@@ -282,3 +346,56 @@ def cube2world(u, v):
         lor(lor(indUp, indLeft), lor(indForward, indRight)), lor(indDown, indBackward))
     valid[valid_ind] = 1
     return x, y, z, valid
+
+def world2fisheye(x, y, z, k, d, xi):
+    # world -> fisheye
+
+    fx = k[0, 0]
+    fy = k[1, 1]
+    cx = k[0, 2]
+    cy = k[1, 2]
+    s  = k[0, 1]
+    
+    k1 = d[0, 0]
+    k2 = d[0, 1]
+    p1 = d[0, 2]
+    p2 = d[0, 3]
+
+    initial_size = x.shape
+
+    points = np.stack((x,y,z), axis=-1).reshape((initial_size[0]*initial_size[1], 3))
+    n = points.shape[0]
+
+    #Y and Z negative to fit with skylibs coordinates
+    points[:,1] = -points[:,1]
+    points[:,2] = -points[:,2]
+
+    #Convert to unit sphere
+    points_s = points / np.linalg.norm(points,axis=1)[:, np.newaxis]
+    
+    #Convert to normalised image plane
+    points_u = np.zeros((n,2))
+    points_u[:,0] = points_s[:,0]/(points_s[:,2]+xi)
+    points_u[:,1] = points_s[:,1]/(points_s[:,2]+xi)
+    #np.array([points_s[:,0]/(points_s[:,2]+xi), points_s[:,1]/(points_s[:,2]+xi)])
+
+    #Add distortion
+    r2 = points_u[:,0]**2 + points_u[:,1]**2
+    r4 = r2**2
+
+    points_d = np.zeros((n,2))
+    points_d[:,0] = points_u[:,0] * (1 + k1*r2 + k2*r4) + 2*p1*points_u[:,0]*points_u[:,1] + p2*(r2 + 2*(points_u[:,0]**2))
+    points_d[:,1] = points_u[:,1] * (1 + k1*r2 + k2*r4) + 2*p2*points_u[:,0]*points_u[:,1] + p1*(r2 + 2*(points_u[:,1]**2))
+
+    #Convert to pixel coordinates
+    u = fx*points_d[:,0] + s*points_d[:,1] + cx
+    v = fy*points_d[:,1] + cy
+
+    u = u.reshape(initial_size)
+    v = v.reshape(initial_size)
+
+    #Normalisation assumes that the image is square and that the whole image is in the input points
+    u = u / initial_size[0]
+    v = v / initial_size[1]
+
+    return u, v

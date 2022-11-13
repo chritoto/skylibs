@@ -49,6 +49,7 @@ e_angular_sa = e_angular.solidAngles()
 - cube
 - skyangular
 - skylatlong
+- fisheye
 
 #### Coordinates system
 
